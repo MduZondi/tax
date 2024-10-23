@@ -333,9 +333,8 @@ def main():
         report_type = st.selectbox("Select Report Type", 
             ["Tax Summary", "Expense Analysis", "Deductions Overview"])
         
-        # Continued from previous code...
             
-            if report_type == "Tax Summary":
+        if report_type == "Tax Summary":
                 # Generate comprehensive tax summary
                 user_data = user_ref.get().to_dict() or {}
                 expenses = list(user_ref.collection('expenses').stream())
@@ -382,7 +381,7 @@ def main():
                         )
                     os.unlink(pdf_path)
 
-            elif report_type == "Expense Analysis":
+        elif report_type == "Expense Analysis":
                 st.subheader("Expense Analysis")
                 
                 # Load expenses
@@ -445,9 +444,9 @@ def main():
                     st.dataframe(breakdown_df)
                     
                 else:
-                    st.info("No expenses recorded yet.")
+                    st.info("No expenses recorded yet.")    
 
-            elif report_type == "Deductions Overview":
+        elif report_type == "Deductions Overview":
                 st.subheader("Deductions Overview")
                 
                 # Load user data and expenses
@@ -506,7 +505,7 @@ def main():
                             file_name=f"Deductions_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
                             mime="application/pdf"
                         )
-                    os.unlink(pdf_path)
+                    os.unlink(pdf_path)    
 
 if __name__ == "__main__":
-    main()
+    main()    
