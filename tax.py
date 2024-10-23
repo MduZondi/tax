@@ -1,9 +1,10 @@
 import streamlit as st
 import firebase_admin
-from firebase_admin import credentials, firestore
-import pyrebase
+from firebase_admin import credentials, firestore, auth
+import pandas as pd
 from datetime import datetime
 import json
+import bcrypt
 
 # Initialize Firebase Admin
 @st.cache_resource
@@ -17,69 +18,91 @@ def init_firebase_admin():
             st.error(f"Error initializing Firebase: {str(e)}")
     return firestore.client()
 
-# Firebase Configuration
-firebase_config = {
-    "apiKey": st.secrets["firebase_config"]["api_key"],
-    "authDomain": st.secrets["firebase_config"]["auth_domain"],
-    "projectId": st.secrets["firebase_config"]["project_id"],
-    "storageBucket": st.secrets["firebase_config"]["storage_bucket"],
-    "messagingSenderId": st.secrets["firebase_config"]["messaging_sender_id"],
-    "databaseURL": f"https://{st.secrets['firebase_config']['project_id']}.firebaseio.com"
-}
+def hash_password(password):
+    """Hash password using bcrypt"""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt())
 
-# Initialize Pyrebase
-firebase = pyrebase.initialize_app(firebase_config)
-auth = firebase.auth()
+def check_password(password, hashed):
+    """Verify password against hash"""
+    return bcrypt.checkpw(password.encode(), hashed)
 
 def login_signup():
+    """Handle user authentication"""
     st.title("Tax Expense Tracker")
     
     # Create tabs for Login and Sign Up
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
     
     with tab1:  # Login
+        st.subheader("Login")
         email = st.text_input("Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_password")
         
-        if st.button("Login"):
+        if st.button("Login", key="login_button"):
             try:
-                user = auth.sign_in_with_email_and_password(email, password)
-                st.session_state['user'] = user
-                st.success("Logged in successfully!")
-                st.experimental_rerun()
+                # Get user by email
+                user = auth.get_user_by_email(email)
+                # Get stored password hash from Firestore
+                db = firestore.client()
+                user_doc = db.collection('users').document(user.uid).get()
+                if user_doc.exists:
+                    stored_hash = user_doc.to_dict().get('password_hash')
+                    if check_password(password, stored_hash):
+                        st.session_state['user'] = {'localId': user.uid, 'email': email}
+                        st.success("Successfully logged in!")
+                        st.experimental_rerun()
+                    else:
+                        st.error("Invalid password")
+                else:
+                    st.error("User not found")
             except Exception as e:
                 st.error("Login failed. Please check your credentials.")
     
     with tab2:  # Sign Up
+        st.subheader("Create New Account")
         email = st.text_input("Email", key="signup_email")
         password = st.text_input("Password", type="password", key="signup_password")
         confirm_password = st.text_input("Confirm Password", type="password")
         
-        if st.button("Sign Up"):
+        if st.button("Sign Up", key="signup_button"):
             if password != confirm_password:
                 st.error("Passwords do not match!")
                 return
             
             try:
-                user = auth.create_user_with_email_and_password(email, password)
+                # Create user in Firebase Auth
+                user = auth.create_user(
+                    email=email,
+                    password=password
+                )
+                
+                # Store additional user data in Firestore
+                db = firestore.client()
+                password_hash = hash_password(password)
+                db.collection('users').document(user.uid).set({
+                    'email': email,
+                    'password_hash': password_hash,
+                    'created_at': datetime.now()
+                })
+                
                 st.success("Account created successfully! Please login.")
                 st.balloons()
             except Exception as e:
-                st.error("Sign up failed. Please try again.")
+                st.error(f"Sign up failed: {str(e)}")
 
 def main():
     # Initialize Firebase
     db = init_firebase_admin()
     
-    # Check authentication
+    # Check if user is logged in
     if 'user' not in st.session_state:
         login_signup()
         return
 
-    # Main app UI
+    # Main app UI after login
     st.title("Tax Expense Tracker")
     
-    # Logout button
+    # Add logout button to sidebar
     if st.sidebar.button("Logout"):
         del st.session_state['user']
         st.experimental_rerun()
@@ -102,10 +125,7 @@ def main():
 
         submitted = st.form_submit_button("Add Expense")
         if submitted:
-            # Get user ID from session
             user_id = st.session_state.user['localId']
-            
-            # Create expense data
             expense_data = {
                 "type": expense_type,
                 "description": expense_description,
@@ -114,7 +134,6 @@ def main():
                 "timestamp": datetime.now()
             }
             
-            # Save to Firestore
             db.collection('users').document(user_id).collection('expenses').add(expense_data)
             st.success("Expense added successfully!")
             st.experimental_rerun()
@@ -129,12 +148,19 @@ def main():
         expenses.append(expense_data)
 
     if expenses:
-        import pandas as pd
         df = pd.DataFrame(expenses)
         
-        # Calculate totals
+        # Display metrics
+        col1, col2, col3 = st.columns(3)
         total = df['amount'].sum()
-        st.metric("Total Expenses", f"R {total:,.2f}")
+        with col1:
+            st.metric("Total Expenses", f"R {total:,.2f}")
+        with col2:
+            current_month = datetime.now().strftime('%Y-%m')
+            monthly_total = df[df['date'].str.startswith(current_month)]['amount'].sum()
+            st.metric("This Month", f"R {monthly_total:,.2f}")
+        with col3:
+            st.metric("Average Expense", f"R {total/len(expenses):,.2f}")
         
         # Display expense table
         st.dataframe(
